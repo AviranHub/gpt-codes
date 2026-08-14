@@ -9,9 +9,10 @@ late final AudioPlayerHandler globalAudioHandler;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // AudioServiceConfig is not a const constructor in audio_service 0.18.19.
   globalAudioHandler = await AudioService.init(
     builder: () => AudioPlayerHandler(),
-    config: const AudioServiceConfig(
+    config: AudioServiceConfig(
       androidNotificationChannelId: 'com.bookhut.audio',
       androidNotificationChannelName: 'پخش کتاب صوتی',
       androidNotificationOngoing: true,
@@ -22,7 +23,8 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-class AudioPlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
+class AudioPlayerHandler extends BaseAudioHandler
+    with QueueHandler, SeekHandler {
   final AudioPlayer player = AudioPlayer();
 
   AudioPlayerHandler() {
@@ -101,7 +103,7 @@ class AudioPlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler
     }
   }
 
-  Future<AudioSource> _sourceFor(String url, MediaItem item) async {
+  AudioSource _sourceFor(String url, MediaItem item) {
     if (url.startsWith('file://')) {
       return AudioSource.file(
         Uri.parse(url).toFilePath(),
@@ -130,7 +132,7 @@ class AudioPlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler
       artUri: Uri.tryParse(artUrl),
     );
 
-    final source = await _sourceFor(audioUrl, item);
+    final source = _sourceFor(audioUrl, item);
 
     queue.add([item]);
     await player.setAudioSource(source);
@@ -167,17 +169,16 @@ class AudioPlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler
       ),
     );
 
-    final sources = <AudioSource>[];
-    for (var index = 0; index < chapterUrls.length; index++) {
-      sources.add(await _sourceFor(chapterUrls[index], items[index]));
-    }
-
-    queue.add(items);
-
-    await player.setAudioSource(
-      ConcatenatingAudioSource(children: sources),
+    final sources = List<AudioSource>.generate(
+      chapterUrls.length,
+      (index) => _sourceFor(chapterUrls[index], items[index]),
     );
 
+    // just_audio 0.10.x replaced the deprecated
+    // ConcatenatingAudioSource API with setAudioSources().
+    queue.add(items);
+
+    await player.setAudioSources(sources);
     mediaItem.add(items.first);
   }
 
@@ -195,16 +196,9 @@ class AudioPlayerHandler extends BaseAudioHandler with QueueHandler, SeekHandler
     mediaItem.add(item);
   }
 
-  @override
-  Future<void> onTaskRemoved() async {
-    // Keep the audio service alive when the app task is removed.
-  }
-
-  @override
-  Future<void> close() async {
-    await player.dispose();
-    await super.close();
-  }
+  // AudioService 0.18.19 does not expose close() on BaseAudioHandler.
+  // The service owns this handler; the player is disposed by the service
+  // lifecycle rather than by a nonexistent superclass close() method.
 }
 
 class MyApp extends StatelessWidget {
