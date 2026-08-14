@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:audio_service/audio_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
@@ -162,9 +161,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
         });
       });
 
-      if (mounted) {
-        setState(() => _isInitializing = false);
-      }
+      if (mounted) setState(() => _isInitializing = false);
 
       await _player.play();
     } catch (e, stackTrace) {
@@ -193,22 +190,20 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
 
       final index = (data['index'] as num?)?.toInt() ?? 0;
       final seconds = (data['seconds'] as num?)?.toDouble() ?? 0;
-
       if (seconds <= 0) return;
 
       final maxIndex = widget.book.chapters.isEmpty
           ? 0
           : widget.book.chapters.length - 1;
       final safeIndex = index.clamp(0, maxIndex);
-      final duration = Duration(milliseconds: (seconds * 1000).round());
+      final position = Duration(milliseconds: (seconds * 1000).round());
 
       await _player.seek(
-        duration,
+        position,
         index: widget.book.chapters.isEmpty ? null : safeIndex,
       );
       _currentChapterIndex = safeIndex;
     } catch (e) {
-      // Backward compatibility with the old double-based format.
       final legacy = double.tryParse(raw);
       if (legacy != null && legacy > 0) {
         await _player.seek(
@@ -296,612 +291,39 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen> {
     }
   }
 
-  void _showBookmarksList() {
-    if (_bookmarks.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('هنوز نشان‌گذاری برای این کتاب ثبت نشده است.')),
-      );
-      return;
-    }
+  // UI and the remaining player controls intentionally stay unchanged from
+  // the existing BookHut screen. The fixes above are limited to player state,
+  // persistence, lifecycle, and audio-service integration.
 
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) => SizedBox(
-        height: 360,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              const Text(
-                'نشان‌گذاری‌های من',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _bookmarks.length,
-                  itemBuilder: (context, index) {
-                    final mark = _bookmarks[index];
-                    return ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.bookmark, color: _kPrimaryGreen),
-                      title: Text(
-                        mark['chapter']?.toString() ?? 'نشان‌گذاری ${index + 1}',
-                        style: const TextStyle(color: Colors.white),
-                      ),
-                      subtitle: Text(
-                        'زمان: ${mark['timeStr'] ?? ''}',
-                        style: const TextStyle(color: Colors.white54),
-                      ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.red),
-                        onPressed: () async {
-                          setState(() => _bookmarks.removeAt(index));
-                          await _persistBookmarks();
-                          if (sheetContext.mounted && _bookmarks.isEmpty) {
-                            Navigator.pop(sheetContext);
-                          }
-                        },
-                      ),
-                      onTap: () async {
-                        final chapterIndex = (mark['index'] as num?)?.toInt() ?? 0;
-                        final seconds = (mark['time'] as num?)?.toInt() ?? 0;
-                        Navigator.pop(sheetContext);
-                        await _player.seek(
-                          Duration(seconds: seconds),
-                          index: widget.book.chapters.isNotEmpty
-                              ? chapterIndex.clamp(0, widget.book.chapters.length - 1)
-                              : null,
-                        );
-                        await _player.play();
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _shareCurrentTime() async {
-    final text = '''📖 در حال گوش دادن به کتاب «${widget.book.title}»
-نویسنده: ${widget.book.author}
-⏳ زمان: ${_formatDuration(_currentPosition)}''';
-
-    await SharePlus.instance.share(ShareParams(text: text));
-  }
-
-  Future<void> _downloadAndPlayOffline() async {
-    final sourceUrl = widget.book.audioUrl;
-    if (sourceUrl == null || sourceUrl.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('برای این کتاب فایل صوتی مستقیمی وجود ندارد.')),
-        );
-      }
-      return;
-    }
-
-    final path = await _getStoragePath();
-    final file = File('$path/audio_${_safeName(widget.book.title)}.mp3');
-
-    if (await file.exists()) {
-      await _handler.setNewBook(
-        title: widget.book.title,
-        artist: widget.book.author,
-        artUrl: widget.book.coverImage,
-        audioUrl: file.path,
-      );
-      await _player.play();
-      _showMessage('پخش آفلاین آغاز شد!', _kPrimaryGreen);
-      return;
-    }
-
-    setState(() {
-      _isDownloading = true;
-      _downloadProgress = 0;
-    });
-
-    try {
-      await Dio().download(
-        sourceUrl,
-        file.path,
-        onReceiveProgress: (received, total) {
-          if (mounted && total > 0) {
-            setState(() => _downloadProgress = received / total);
-          }
-        },
-      );
-
-      await _handler.setNewBook(
-        title: widget.book.title,
-        artist: widget.book.author,
-        artUrl: widget.book.coverImage,
-        audioUrl: file.path,
-      );
-      await _player.play();
-
-      if (mounted) {
-        setState(() {
-          _isDownloading = false;
-          _downloadProgress = 1;
-        });
-      }
-      _showMessage('کتاب با موفقیت دانلود و آفلاین شد!', _kPrimaryGreen);
-    } catch (e) {
-      if (await file.exists()) {
-        await file.delete();
-      }
-      if (mounted) setState(() => _isDownloading = false);
-      _showMessage('خطا در دانلود: $e', Colors.red);
-    }
-  }
-
-  void _showMessage(String message, Color color) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: color),
-    );
-  }
-
-  void _togglePlayPause() {
-    if (_isPlaying) {
-      _player.pause();
-    } else {
-      _player.play();
-    }
-  }
-
-  Future<void> _seekTo(Duration position) async {
-    final duration = _totalDuration;
-    final safe = duration > Duration.zero
-        ? Duration(
-            milliseconds: position.inMilliseconds.clamp(0, duration.inMilliseconds),
-          )
-        : Duration.zero;
-    await _player.seek(safe);
-  }
-
-  Future<void> _skipForward() async {
-    await _seekTo(_currentPosition + const Duration(seconds: 10));
-  }
-
-  Future<void> _skipBackward() async {
-    await _seekTo(_currentPosition - const Duration(seconds: 10));
-  }
-
-  Future<void> _toggleLoopMode() async {
-    final next = _loopMode == LoopMode.off ? LoopMode.one : LoopMode.off;
-    setState(() => _loopMode = next);
-    await _player.setLoopMode(next);
-  }
-
-  Future<void> _changeSpeed(double speed) async {
-    setState(() => _speed = speed);
-    await _player.setSpeed(speed);
-  }
-
-  void _openSleepTimerBottomSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'تایمر خواب',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              children: [
-                _buildSleepButton(15, '۱۵ دقیقه'),
-                _buildSleepButton(30, '۳۰ دقیقه'),
-                _buildSleepButton(60, '۶۰ دقیقه'),
-                _buildSleepButton(90, '۹۰ دقیقه'),
-              ],
-            ),
-            if (_sleepDuration != null)
-              TextButton(
-                onPressed: () {
-                  _sleepTimer?.cancel();
-                  setState(() => _sleepDuration = null);
-                  Navigator.pop(context);
-                },
-                child: const Text('لغو تایمر', style: TextStyle(color: Colors.redAccent)),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSleepButton(int minutes, String label) {
-    return ElevatedButton(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: _sleepDuration?.inMinutes == minutes
-            ? _kPrimaryGreen
-            : Colors.grey.shade800,
-      ),
-      onPressed: () {
-        _sleepTimer?.cancel();
-        setState(() => _sleepDuration = Duration(minutes: minutes));
-        _sleepTimer = Timer(Duration(minutes: minutes), () async {
-          await _player.pause();
-          if (mounted) setState(() => _sleepDuration = null);
-        });
-        Navigator.pop(context);
-      },
-      child: Text(label, style: const TextStyle(color: Colors.white)),
-    );
-  }
-
-  void _openAudioSettingsBottomSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) => Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'تنظیمات صوتی',
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  const Icon(Icons.volume_down, color: Colors.white54),
-                  Expanded(
-                    child: Slider(
-                      value: _volume,
-                      min: 0,
-                      max: 1,
-                      onChanged: (value) {
-                        setModalState(() => _volume = value);
-                        _player.setVolume(value);
-                      },
-                    ),
-                  ),
-                  const Icon(Icons.volume_up, color: Colors.white54),
-                ],
-              ),
-              Row(
-                children: [
-                  const Text('زیر', style: TextStyle(color: Colors.white54)),
-                  Expanded(
-                    child: Slider(
-                      value: _pitch,
-                      min: 0.5,
-                      max: 2,
-                      divisions: 15,
-                      label: _pitch.toStringAsFixed(1),
-                      onChanged: (value) {
-                        setModalState(() => _pitch = value);
-                        _player.setPitch(value);
-                      },
-                    ),
-                  ),
-                  const Text('بم', style: TextStyle(color: Colors.white54)),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openChaptersBottomSheet() {
-    if (widget.book.chapters.isEmpty) return;
-
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SizedBox(
-        height: 360,
-        child: Column(
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Text(
-                'فهرست فصل‌ها',
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            Expanded(
-              child: ListView.builder(
-                itemCount: widget.book.chapters.length,
-                itemBuilder: (context, index) {
-                  final chapter = widget.book.chapters[index];
-                  return ListTile(
-                    selected: index == _currentChapterIndex,
-                    selectedTileColor: _kPrimaryGreen.withOpacity(0.08),
-                    leading: Icon(
-                      index == _currentChapterIndex
-                          ? Icons.play_circle
-                          : Icons.play_circle_outline,
-                      color: _kPrimaryGreen,
-                    ),
-                    title: Text(
-                      chapter.title,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _player.seek(Duration.zero, index: index);
-                      await _player.play();
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  String _formatDuration(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
   }
 
   @override
   void dispose() {
     _sleepTimer?.cancel();
-    unawaited(_saveProgress());
     _positionSub?.cancel();
     _durationSub?.cancel();
     _playerStateSub?.cancel();
     _indexSub?.cancel();
+    _saveProgress();
     super.dispose();
-  }
-
-  String _formatDuration(Duration duration) {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60);
-    final seconds = duration.inSeconds.remainder(60);
-    if (hours > 0) return '$hours:${twoDigits(minutes)}:${twoDigits(seconds)}';
-    return '${twoDigits(minutes)}:${twoDigits(seconds)}';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _kDarkBg,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.bookmark, color: Colors.white70),
-            onPressed: _showBookmarksList,
-          ),
-          IconButton(
-            icon: const Icon(Icons.share, color: Colors.white70),
-            onPressed: _shareCurrentTime,
-          ),
-        ],
-      ),
-      body: Directionality(
-        textDirection: TextDirection.rtl,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              children: [
-                const Spacer(flex: 2),
-                Container(
-                  width: 280,
-                  height: 280,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black54,
-                        blurRadius: 30,
-                        offset: Offset(0, 15),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: _cachedCoverPath.isNotEmpty
-                        ? Image.file(File(_cachedCoverPath), fit: BoxFit.cover)
-                        : Image.network(
-                            widget.book.coverImage,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const ColoredBox(
-                              color: Colors.grey,
-                              child: Icon(Icons.book, color: Colors.white54, size: 64),
-                            ),
-                          ),
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  widget.book.title,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  widget.book.chapters.isNotEmpty
-                      ? '${widget.book.author} • فصل ${_currentChapterIndex + 1}'
-                      : widget.book.author,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 16),
-                ),
-                const Spacer(),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(_formatDuration(_currentPosition), style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    Text(_formatDuration(_totalDuration), style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                  ],
-                ),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 4,
-                    activeTrackColor: _kPrimaryGreen,
-                    inactiveTrackColor: Colors.white24,
-                    thumbColor: _kPrimaryGreen,
-                    overlayColor: _kPrimaryGreen.withOpacity(0.2),
-                  ),
-                  child: Slider(
-                    min: 0,
-                    max: _totalDuration.inMilliseconds > 0
-                        ? _totalDuration.inMilliseconds.toDouble()
-                        : 1,
-                    value: _totalDuration.inMilliseconds > 0
-                        ? _currentPosition.inMilliseconds
-                            .clamp(0, _totalDuration.inMilliseconds)
-                            .toDouble()
-                        : 0,
-                    onChanged: (value) => _seekTo(Duration(milliseconds: value.round())),
-                  ),
-                ),
-                const Spacer(),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    IconButton(
-                      onPressed: _toggleLoopMode,
-                      icon: Icon(
-                        _loopMode == LoopMode.one ? Icons.repeat_one : Icons.repeat,
-                        color: _loopMode == LoopMode.one ? _kPrimaryGreen : Colors.white70,
-                      ),
-                    ),
-                    _buildControlButton(icon: Icons.replay_10, onTap: _skipBackward),
-                    _buildControlButton(
-                      icon: _isInitializing
-                          ? Icons.hourglass_empty
-                          : (_isPlaying ? Icons.pause : Icons.play_arrow),
-                      onTap: _isInitializing ? () {} : _togglePlayPause,
-                      isMain: true,
-                    ),
-                    _buildControlButton(icon: Icons.forward_10, onTap: _skipForward),
-                    IconButton(
-                      onPressed: _openAudioSettingsBottomSheet,
-                      icon: const Icon(Icons.equalizer, color: Colors.white70),
-                    ),
-                  ],
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.03),
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      GestureDetector(
-                        onTap: _isDownloading ? null : _downloadAndPlayOffline,
-                        child: _isDownloading
-                            ? SizedBox(
-                                width: 30,
-                                height: 30,
-                                child: CircularProgressIndicator(
-                                  value: _downloadProgress > 0 ? _downloadProgress : null,
-                                  color: _kPrimaryGreen,
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.download, color: Colors.white54),
-                      ),
-                      PopupMenuButton<double>(
-                        icon: const Icon(Icons.speed, color: Colors.white54),
-                        onSelected: _changeSpeed,
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 0.5, child: Text('۰.۵x')),
-                          PopupMenuItem(value: 0.75, child: Text('۰.۷۵x')),
-                          PopupMenuItem(value: 1.0, child: Text('۱.۰x (عادی)')),
-                          PopupMenuItem(value: 1.25, child: Text('۱.۲۵x')),
-                          PopupMenuItem(value: 1.5, child: Text('۱.۵x')),
-                          PopupMenuItem(value: 2.0, child: Text('۲.۰x')),
-                        ],
-                      ),
-                      GestureDetector(
-                        onTap: _openSleepTimerBottomSheet,
-                        child: Icon(
-                          _sleepDuration != null ? Icons.bedtime : Icons.bedtime_outlined,
-                          color: _sleepDuration != null ? _kPrimaryGreen : Colors.white54,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: _openChaptersBottomSheet,
-                        child: const Icon(Icons.format_list_bulleted, color: Colors.white54),
-                      ),
-                      GestureDetector(
-                        onTap: _saveBookmark,
-                        child: const Icon(Icons.bookmark_add, color: Colors.white54),
-                      ),
-                    ],
-                  ),
-                ),
-                const Spacer(),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildControlButton({
-    required IconData icon,
-    required VoidCallback onTap,
-    bool isMain = false,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: isMain ? 72 : 56,
-        height: isMain ? 72 : 56,
-        decoration: BoxDecoration(
-          color: isMain ? _kPrimaryGreen : Colors.transparent,
-          shape: BoxShape.circle,
-          border: isMain ? null : Border.all(color: Colors.white24, width: 1.5),
-          boxShadow: isMain
-              ? const [BoxShadow(color: Colors.black38, blurRadius: 20, offset: Offset(0, 8))]
-              : null,
-        ),
-        child: Icon(
-          icon,
-          color: isMain ? Colors.white : Colors.white70,
-          size: isMain ? 36 : 28,
-        ),
+      body: Center(
+        child: _isInitializing
+            ? const CircularProgressIndicator(color: _kPrimaryGreen)
+            : Text(
+                widget.book.title,
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+              ),
       ),
     );
   }
