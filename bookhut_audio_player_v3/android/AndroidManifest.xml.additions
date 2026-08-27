@@ -1,0 +1,39 @@
+<!-- Add tools namespace to the root <manifest> if it is not already present:
+     xmlns:tools="http://schemas.android.com/tools"
+-->
+
+<uses-permission android:name="android.permission.WAKE_LOCK" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+<!-- Put these inside <application>. -->
+<service
+    android:name="com.ryanheise.audioservice.AudioService"
+    android:foregroundServiceType="mediaPlayback"
+    android:exported="true"
+    tools:ignore="Instantiatable">
+    <intent-filter>
+        <action android:name="android.media.browse.MediaBrowserService" />
+    </intent-filter>
+</service>
+
+<receiver
+    android:name="com.ryanheise.audioservice.MediaButtonReceiver"
+    android:exported="true"
+    tools:ignore="Instantiatable">
+    <intent-filter>
+        <action android:name="android.intent.action.MEDIA_BUTTON" />
+    </intent-filter>
+</receiver>
+
+<!-- Replace the current empty FlutterActivity entry with the plugin's activity:
+
+<activity
+    android:name="com.ryanheise.audioservice.AudioServiceActivity"
+    ...same existing Flutter activity attributes...
+>
+
+BookHut's current MainActivity only extends FlutterActivity and contains no custom
+native behavior, so this migration does not discard application-specific native code.
+--> 
