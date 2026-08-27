@@ -1,0 +1,8 @@
+# audio_service / Android media service
+-keep class com.ryanheise.audioservice.** { *; }
+-keep class * extends android.app.Service { *; }
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
+
+# Keep notification resources referenced by audio_service when resource shrinking is enabled.
+# The BookHut config currently uses the application launcher icon, so this is a
+# defensive rule rather than the primary fix.
